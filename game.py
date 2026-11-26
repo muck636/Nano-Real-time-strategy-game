@@ -153,6 +153,38 @@ class Game:
         factory.queue.append(kind)
         return None
 
+    # Report why a factory's next order is waiting, or show its progress.
+    def factory_status(self, factory):
+        if not factory.queue:
+            return "Idle"
+        if self.unlimited_funds(factory.team):
+            return "Exit blocked"
+        if not self.powered(factory.team):
+            return "No power"
+
+        kind = factory.queue[0]
+        if kind == "tank2" and factory.production == 0 and not self.has_tech(factory.team):
+            return "Needs Tech Center"
+        total = C.FACTIONS[factory.team][kind]["time"]
+        if factory.production >= total:
+            return "Exit blocked"
+        return f"{int(factory.production / total * 100)}%"
+
+    # Cancel a paid order that has not started production and refund its cost.
+    def cancel_training(self, team, factory, index):
+        if factory not in self.team_buildings(team, "factory", complete_only=True):
+            return "Select a completed War Factory"
+        if not 0 <= index < len(factory.queue):
+            return "Order no longer queued"
+        if index == 0 and factory.production > 0:
+            return "Production already started"
+
+        kind = factory.queue.pop(index)
+        refund = self.cost(team, kind)
+        self.money[team] += refund
+        self.notify(f"Refunded ${refund}")
+        return None
+
     # Start or stop repairing an eligible building.
     def toggle_repair(self, team, building):
         if building not in self.buildings or building.team != team or not building.complete:
@@ -401,8 +433,9 @@ class Game:
                 kind = b.queue[0]
                 # Losing the Tech Center blocks starting a new T2 item.
                 if b.production > 0 or kind != "tank2" or self.has_tech(b.team):
-                    b.production += dt
-                    if b.production >= C.FACTIONS[b.team][kind]["time"] and self._spawn(b, kind):
+                    total = C.FACTIONS[b.team][kind]["time"]
+                    b.production = min(total, b.production + dt)
+                    if b.production == total and self._spawn(b, kind):
                         b.queue.pop(0)
                         b.production = 0
             if b.kind.startswith("tower") and power_ok[b.team] and b.cooldown <= 0:

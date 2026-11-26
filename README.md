@@ -40,15 +40,20 @@ python -m venv .venv
 | --- | --- |
 | Move the camera | Use **WASD** or the arrow keys, move the mouse to the edge of the battlefield, or left-click the minimap. |
 | Select one unit or building | Left-click your unit or building. A diamond marks the selection. |
-| Select several tanks | Hold the left mouse button and drag a box around them. |
+| Select several tanks | Hold the left mouse button and drag a box around them. Hold **Shift** while clicking or box-selecting to add tanks to your selection. |
+| Use a control group | Press **Ctrl + 0–9** to save the selected tanks. Press that number to recall them, or press it twice to center the camera on the group. |
+| Filter order lines | Press **F2** to switch between all order lines and order lines for the selected tanks. |
 | Move selected tanks | Right-click open ground. Green lines show movement orders. |
 | Attack an enemy | Right-click an enemy unit or building. Red lines show attack orders. |
 | Place a building | Left-click its button under **BUILD**, then left-click a valid location on the map. |
 | Cancel building placement | Right-click or press **Esc**. |
 | Open the console | Press **Enter** during a match. The match pauses while the console is open. |
-| Start over | Press **R** to return to faction selection. This immediately ends the current match. |
+| Pause or resume | Press **Esc**. If you are placing a building, the first press cancels placement. |
+| Start over | Press **R**, then **Enter** to return to faction selection. Press **Esc** to keep playing. On the result screen, **R** starts over directly. |
 
 Close the game using the window's close button. On the result screen, **Esc** also quits. When you select an object, the right-hand **SELECTION** area shows its health as `HP current / maximum`.
+
+Select a completed War Factory to see its queue. Click a pending order's icon to cancel it and recover its full cost. Use **<** and **>** to page through longer queues. The gold outline marks the order in production. The status line shows when the factory is out of power, needs a Tech Center, or has a finished tank waiting for a clear exit.
 
 ## God Mode
 

@@ -22,10 +22,15 @@ class UI:
         self.large = pygame.font.SysFont("arial", 42, bold=True)
         self.title = pygame.font.SysFont("arial", 27, bold=True)
         self.selected = []
+        self.control_groups = {}
+        self.last_group_press = None
+        self.selected_routes_only = False
         self.build_kind = None
         self.console_open = False
         self.console_text = ""
         self.drag_start = None
+        self.match_menu = None
+        self.queue_view = (None, 0)
         self.buttons = []
         self.rotated_sprites = OrderedDict()
         self.minimap_rect = pygame.Rect(C.MAP_WIDTH + 18, 83, 264, 194)
@@ -45,7 +50,7 @@ class UI:
         self.disabled_unit_icons = {}
         for key, filename in icon_files.items():
             original = pygame.image.load(str(assets / "unit_icons" / filename)).convert_alpha()
-            for size in (48, 64, 96):
+            for size in (22, 48, 64, 96):
                 self.unit_icons[(*key, size)] = pygame.transform.smoothscale(original, (size, size))
             disabled = self.unit_icons[(*key, 48)].copy()
             disabled.set_alpha(140)
@@ -204,6 +209,38 @@ class UI:
         self.text(screen, C.FACTIONS[team][kind]["name"], rect.x + 56, rect.y + 7, color, self.small)
         self.text(screen, f"${game.cost(team, kind)}", rect.x + 56, rect.y + 29, color, self.small)
 
+    # Show the factory's status and a page of its pending orders.
+    def draw_factory_queue(self, screen, game, factory, px):
+        orders = tuple(factory.queue)
+        status = game.factory_status(factory)
+        self.text(screen, f"Queue {len(orders)}: {status}", px, 592, font=self.small)
+        if len(orders) > 1 or (orders and factory.production == 0):
+            self.text(screen, "Click an order to cancel", px + 100, 549,
+                      C.COLORS["muted"], self.small)
+
+        page_size = 4
+        last_page = max(0, (len(orders) - 1) // page_size)
+        previous_factory, page = self.queue_view
+        page = min(page, last_page) if previous_factory is factory else 0
+        self.queue_view = (factory, page)
+
+        first = page * page_size
+        for index in range(first, min(first + page_size, len(orders))):
+            rect = pygame.Rect(px + 100 + 25 * (index - first), 567, 24, 24)
+            started = index == 0 and factory.production > 0
+            icon = self.unit_icons[factory.team, orders[index], 22]
+            screen.blit(icon, rect.move(1, 1).topleft)
+            color = C.COLORS["ore"] if started else C.COLORS["muted"]
+            pygame.draw.rect(screen, color, rect, 1)
+            if not started:
+                self.buttons.append((rect, ("cancel_train", (factory, index, orders)), True))
+
+        if last_page:
+            for label, offset, target in (("<", 202, page - 1), (">", 234, page + 1)):
+                rect = pygame.Rect(px + offset, 565, 29, 26)
+                self.button(screen, rect, label, 0 <= target <= last_page,
+                            action=("queue_page", (factory, target)))
+
     # Display portraits and counts for selected tank types.
     def draw_selected_unit_icons(self, screen, selected, panel_x):
         counts = {}
@@ -238,7 +275,7 @@ class UI:
     def draw_order_lines(self, screen, game, alpha):
         markers = set()
         for tank in game.tanks:
-            if tank.hp <= 0:
+            if tank.hp <= 0 or (self.selected_routes_only and tank not in self.selected):
                 continue
             x = tank.previous_x + (tank.x - tank.previous_x) * alpha
             y = tank.previous_y + (tank.y - tank.previous_y) * alpha
@@ -499,19 +536,17 @@ class UI:
             if isinstance(obj, Building):
                 if not obj.complete:
                     self.text(screen, f"Building {int(obj.progress / obj.stats['time'] * 100)}%", px, 592, font=self.small)
-                elif obj.kind == "factory":
-                    if obj.queue:
-                        active = obj.queue[0]
-                        total = C.FACTIONS[obj.team][active]["time"]
-                        self.text(screen, f"Queue {len(obj.queue)}: {int(obj.production / total * 100)}%", px, 592, font=self.small)
-                    if obj.team == game.player:
-                        for index, kind in enumerate(("tank1", "tank2")):
-                            enabled = (game.god_mode or game.money[obj.team] >= game.cost(obj.team, kind)) and (kind != "tank2" or game.has_tech(obj.team))
-                            rect = pygame.Rect(px + 136 * index, 610, 128, 56)
-                            self.unit_training_button(screen, rect, obj.team, kind, game, enabled)
+                elif obj.kind == "factory" and obj.team == game.player:
+                    self.draw_factory_queue(screen, game, obj, px)
+                    for index, kind in enumerate(("tank1", "tank2")):
+                        affordable = game.god_mode or game.money[obj.team] >= game.cost(obj.team, kind)
+                        enabled = affordable and (kind != "tank2" or game.has_tech(obj.team))
+                        rect = pygame.Rect(px + 136 * index, 610, 128, 56)
+                        self.unit_training_button(screen, rect, obj.team, kind, game, enabled)
         if game.message_time > 0:
             self.text(screen, game.message[:35], px, 676, C.COLORS["ore"], self.small)
-        self.text(screen, "Enter: console  |  WASD: pan", px, 699, C.COLORS["muted"], self.small)
+        self.text(screen, "Esc: pause  |  Enter: console  |  F2: routes", px, 699,
+                  C.COLORS["muted"], self.small)
 
     # Draw the command console and its input hint.
     def draw_console(self, screen):
@@ -543,7 +578,46 @@ class UI:
         elif event.unicode and event.unicode.isprintable() and len(self.console_text) < 48:
             self.console_text += event.unicode
 
-    # Draw the game view, side panel, and any result or console overlays.
+    # Save or recall numbered tank groups and toggle order lines.
+    def handle_selection_key(self, event, game):
+        if event.key == pygame.K_F2:
+            self.selected_routes_only = not self.selected_routes_only
+            self.last_group_press = None
+            label = "Selected routes only" if self.selected_routes_only else "All routes"
+            game.notify(label)
+            return
+        if not pygame.K_0 <= event.key <= pygame.K_9:
+            self.last_group_press = None
+            return
+
+        slot = event.key - pygame.K_0
+        live = {t for t in game.tanks if t.team == game.player and t.hp > 0}
+        if event.mod & pygame.KMOD_CTRL:
+            members = [t for t in self.selected if t in live]
+            if members:
+                self.control_groups[slot] = members
+                game.notify(f"Group {slot}: {len(members)} tanks")
+            self.last_group_press = None
+            return
+
+        members = [t for t in self.control_groups.get(slot, ()) if t in live]
+        if not members:
+            self.control_groups.pop(slot, None)
+            self.last_group_press = None
+            return
+
+        self.control_groups[slot] = members
+        self.selected = members.copy()
+        now = pygame.time.get_ticks()
+        previous = self.last_group_press
+        if previous and previous[0] == slot and now - previous[1] <= 350:
+            self.center_on(sum(t.x for t in members) / len(members),
+                           sum(t.y for t in members) / len(members))
+            self.last_group_press = None
+        else:
+            self.last_group_press = (slot, now)
+
+    # Draw the game view, side panel, and overlays.
     def draw(self, screen, game, alpha=1.0):
         self.draw_map(screen, game, alpha)
         self.draw_panel(screen, game)
@@ -558,6 +632,21 @@ class UI:
             screen.blit(image, image.get_rect(center=(C.WIDTH/2, C.HEIGHT/2 + 28)))
         if self.console_open:
             self.draw_console(screen)
+        if self.match_menu is not None:
+            overlay = pygame.Surface((C.WIDTH, C.HEIGHT), pygame.SRCALPHA)
+            overlay.fill((9, 15, 22, 195))
+            screen.blit(overlay, (0, 0))
+
+            if self.match_menu == "restart":
+                title = "Return to faction selection?"
+                hint = "Enter: confirm    Esc: resume match"
+            else:
+                title = "Paused"
+                hint = "Esc: resume    R: restart"
+
+            for text, font, offset in ((title, self.large, -28), (hint, self.font, 28)):
+                image = font.render(text, True, C.COLORS["text"])
+                screen.blit(image, image.get_rect(center=(C.WIDTH // 2, C.HEIGHT // 2 + offset)))
 
     # Handle movement, attacks, minimap, building, and panel clicks.
     def handle_mouse_down(self, event, game):
@@ -588,6 +677,18 @@ class UI:
             for rect, action, enabled in self.buttons:
                 if rect.collidepoint(pos):
                     mode, kind = action
+                    if mode == "queue_page":
+                        factory, page = kind
+                        if enabled and factory in self.selected:
+                            self.queue_view = (factory, page)
+                        return
+                    if mode == "cancel_train":
+                        factory, index, displayed_orders = kind
+                        if factory in self.selected and tuple(factory.queue) == displayed_orders:
+                            reason = game.cancel_training(game.player, factory, index)
+                            if reason:
+                                game.notify(reason)
+                        return
                     if mode == "repair":
                         building = next((o for o in self.selected if isinstance(o, Building)), None)
                         reason = game.toggle_repair(game.player, building)
@@ -623,18 +724,31 @@ class UI:
 
     # Finish click or drag selection of player objects.
     def handle_mouse_up(self, event, game):
-        if event.button != 1 or not self.drag_start or game.winner is not None:
+        if event.button != 1 or self.drag_start is None or game.winner is not None:
             return
         start = self.drag_start
         self.drag_start = None
         end = event.pos
+        battlefield = pygame.Rect(0, 0, C.MAP_WIDTH, C.HEIGHT)
         if math.dist(start, end) < 7:
+            if not battlefield.collidepoint(end):
+                return
             obj = game.object_at(*self.to_world(*end))
-            self.selected = [obj] if obj is not None and obj.team == game.player else []
+            picked = [obj] if obj is not None and obj.team == game.player else []
         else:
-            box = pygame.Rect(min(start[0], end[0]), min(start[1], end[1]),
-                              abs(start[0] - end[0]), abs(start[1] - end[1]))
-            self.selected = [t for t in game.tanks if t.team == game.player and box.collidepoint(*self.to_screen(t.x, t.y))]
+            box = pygame.Rect(start[0], start[1], end[0] - start[0], end[1] - start[1])
+            box.normalize()
+            box = box.clip(battlefield)
+            picked = [t for t in game.tanks if t.team == game.player and
+                      box.collidepoint(self.to_screen(t.x, t.y))]
+
+        if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+            added = [obj for obj in picked if isinstance(obj, Tank)]
+            if added:
+                current = [obj for obj in self.selected if obj in game.tanks]
+                self.selected = list(dict.fromkeys(current + added))
+        else:
+            self.selected = picked
 
 
 # Identify which faction button contains a title-screen click.

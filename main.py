@@ -68,27 +68,46 @@ def main():
                         ui.handle_console_key(event, game)
                     continue
                 if event.type == pygame.KEYDOWN:
-                    if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER) and game.winner is None:
+                    key = event.key
+                    enter = key in (pygame.K_RETURN, pygame.K_KP_ENTER)
+                    restart_confirmed = ui.match_menu == "restart" and enter
+                    new_game_after_result = game.winner is not None and key == pygame.K_r
+
+                    if restart_confirmed or new_game_after_result:
+                        game, computer, ui = None, None, UI()
+                    elif ui.match_menu is not None:
+                        if key == pygame.K_ESCAPE:
+                            ui.match_menu = None
+                        elif key == pygame.K_r:
+                            ui.match_menu = "restart"
+                    elif game.winner is not None:
+                        if key == pygame.K_ESCAPE:
+                            running = False
+                    elif key == pygame.K_r:
+                        ui.drag_start = None
+                        ui.match_menu = "restart"
+                    elif key == pygame.K_ESCAPE:
+                        if ui.build_kind is not None:
+                            ui.build_kind = None
+                        else:
+                            ui.drag_start = None
+                            ui.match_menu = "pause"
+                    elif enter:
+                        ui.drag_start = None
                         ui.console_open = True
                         ui.console_text = ""
-                    elif event.key == pygame.K_ESCAPE:
-                        if game.winner is not None:
-                            running = False
-                        else:
-                            ui.build_kind = None
-                    elif event.key == pygame.K_r:
-                        game = None
-                        computer = None
-                        ui = UI()
-                elif event.type == pygame.MOUSEBUTTONDOWN:
-                    ui.handle_mouse_down(event, game)
-                elif event.type == pygame.MOUSEBUTTONUP:
-                    ui.handle_mouse_up(event, game)
+                    else:
+                        ui.handle_selection_key(event, game)
+                elif ui.match_menu is None and game.winner is None:
+                    if event.type == pygame.MOUSEBUTTONDOWN:
+                        ui.handle_mouse_down(event, game)
+                    elif event.type == pygame.MOUSEBUTTONUP:
+                        ui.handle_mouse_up(event, game)
         if game is None:
             accumulator = 0.0
             draw_start(screen, ui)
         else:
-            if not ui.console_open:
+            if not ui.console_open and ui.match_menu is None:
                 keys = pygame.key.get_pressed()
                 mouse_pos = None
                 if game.winner is None and pygame.mouse.get_focused() and pygame.key.get_focused():
